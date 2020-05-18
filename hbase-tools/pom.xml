@@ -25,7 +25,7 @@
     <parent>
         <artifactId>hbase-operator-tools</artifactId>
         <groupId>org.apache.hbase.operator.tools</groupId>
-        <version>1.1.0-SNAPSHOT</version>
+        <version>1.1.0-GIO-Hbase-1.2.11</version>
         <relativePath>..</relativePath>
     </parent>
 
@@ -61,19 +61,19 @@
             <version>${hbase.version}</version>
             <scope>provided</scope>
         </dependency>
-        <dependency>
-            <groupId>org.apache.hbase</groupId>
-            <artifactId>hbase-shaded-testing-util</artifactId>
-            <version>${hbase.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.hbase</groupId>
-            <artifactId>hbase-zookeeper</artifactId>
-            <version>${hbase.version}</version>
-            <scope>provided</scope>
-            <type>test-jar</type>
-        </dependency>
+<!--        <dependency>-->
+<!--            <groupId>org.apache.hbase</groupId>-->
+<!--            <artifactId>hbase-shaded-testing-util</artifactId>-->
+<!--            <version>${hbase.version}</version>-->
+<!--            <scope>test</scope>-->
+<!--        </dependency>-->
+<!--        <dependency>-->
+<!--            <groupId>org.apache.hbase</groupId>-->
+<!--            <artifactId>hbase-zookeeper</artifactId>-->
+<!--            <version>${hbase.version}</version>-->
+<!--            <scope>provided</scope>-->
+<!--            <type>test-jar</type>-->
+<!--        </dependency>-->
         <dependency>
             <groupId>org.apache.hbase</groupId>
             <artifactId>hbase-common</artifactId>
@@ -81,12 +81,12 @@
             <scope>provided</scope>
             <type>test-jar</type>
         </dependency>
-        <dependency>
-            <groupId>org.apache.hbase</groupId>
-            <artifactId>hbase-testing-util</artifactId>
-            <version>${hbase.version}</version>
-            <scope>test</scope>
-        </dependency>
+<!--        <dependency>-->
+<!--            <groupId>org.apache.hbase</groupId>-->
+<!--            <artifactId>hbase-testing-util</artifactId>-->
+<!--            <version>${hbase.version}</version>-->
+<!--            <scope>test</scope>-->
+<!--        </dependency>-->
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>

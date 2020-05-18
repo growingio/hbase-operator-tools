@@ -17,18 +17,13 @@
  */
 package org.apache.hbase;
 
-import static org.apache.hadoop.hbase.HConstants.CATALOG_FAMILY;
-import static org.apache.hadoop.hbase.HConstants.REGIONINFO_QUALIFIER;
-import static org.apache.hadoop.hbase.HConstants.STATE_QUALIFIER;
+import static org.apache.hadoop.hbase.HConstants.*;
 import static org.apache.hadoop.hbase.TableName.META_TABLE_NAME;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -37,22 +32,13 @@ import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.CompareOperator;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.client.Admin;
-import org.apache.hadoop.hbase.client.Connection;
-import org.apache.hadoop.hbase.client.ConnectionFactory;
-import org.apache.hadoop.hbase.client.RegionInfo;
-import org.apache.hadoop.hbase.client.Result;
-import org.apache.hadoop.hbase.client.ResultScanner;
-import org.apache.hadoop.hbase.client.Scan;
-import org.apache.hadoop.hbase.client.Table;
-import org.apache.hadoop.hbase.filter.FilterList;
-import org.apache.hadoop.hbase.filter.RowFilter;
-import org.apache.hadoop.hbase.filter.SingleColumnValueFilter;
-import org.apache.hadoop.hbase.filter.SubstringComparator;
+import org.apache.hadoop.hbase.client.*;
+import org.apache.hadoop.hbase.filter.*;
+import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.util.ToolRunner;
@@ -107,14 +93,14 @@ public class RegionsMerger extends Configured implements org.apache.hadoop.util.
     return size;
   }
 
-  private List<RegionInfo> getOpenRegions(Connection connection, TableName table) throws Exception {
-    List<RegionInfo> regions = new ArrayList<>();
+  private List<HRegionInfo> getOpenRegions(Connection connection, TableName table) throws Exception {
+    List<HRegionInfo> regions = new ArrayList<>();
     Table metaTbl = connection.getTable(META_TABLE_NAME);
     String tblName = table.getNameAsString();
-    RowFilter rowFilter = new RowFilter(CompareOperator.EQUAL,
+    RowFilter rowFilter = new RowFilter(CompareOp.EQUAL,
       new SubstringComparator(tblName+","));
     SingleColumnValueFilter colFilter = new SingleColumnValueFilter(CATALOG_FAMILY,
-      STATE_QUALIFIER, CompareOperator.EQUAL, Bytes.toBytes("OPEN"));
+      STATE_QUALIFIER, CompareOp.EQUAL, Bytes.toBytes("OPEN"));
     Scan scan = new Scan();
     FilterList filter = new FilterList(FilterList.Operator.MUST_PASS_ALL);
     filter.addFilter(rowFilter);
@@ -123,15 +109,15 @@ public class RegionsMerger extends Configured implements org.apache.hadoop.util.
     try(ResultScanner rs = metaTbl.getScanner(scan)){
       Result r;
       while ((r = rs.next()) != null) {
-        RegionInfo region = RegionInfo.parseFrom(r.getValue(CATALOG_FAMILY, REGIONINFO_QUALIFIER));
+        HRegionInfo region = HRegionInfo.parseFrom(r.getValue(CATALOG_FAMILY, REGIONINFO_QUALIFIER));
         regions.add(region);
       }
     }
     return regions;
   }
 
-  private boolean canMerge(Path path, RegionInfo region1, RegionInfo region2,
-      Collection<Pair<RegionInfo, RegionInfo>> alreadyMerging) throws IOException {
+  private boolean canMerge(Path path, HRegionInfo region1, HRegionInfo region2,
+      Collection<Pair<HRegionInfo, HRegionInfo>> alreadyMerging) throws IOException {
     if(alreadyMerging.stream().anyMatch(regionPair ->
         region1.equals(regionPair.getFirst()) ||
         region2.equals(regionPair.getFirst()) ||
@@ -139,7 +125,7 @@ public class RegionsMerger extends Configured implements org.apache.hadoop.util.
         region2.equals(regionPair.getSecond()))){
       return false;
     }
-    if (RegionInfo.areAdjacent(region1, region2)) {
+    if (HRegionInfo.areAdjacent(region1, region2)) {
       long size1 = sumSizeInFS(new Path(path, region1.getEncodedName()));
       long size2 = sumSizeInFS(new Path(path, region2.getEncodedName()));
       boolean mergeable = (resultSizeThreshold > (size1 + size2));
@@ -167,22 +153,29 @@ public class RegionsMerger extends Configured implements org.apache.hadoop.util.
       LongAdder counter = new LongAdder();
       LongAdder lastTimeProgessed = new LongAdder();
       //need to get all regions for the table, regardless of region state
-      List<RegionInfo> regions = admin.getRegions(table);
-      Map<Future, Pair<RegionInfo, RegionInfo>> regionsMerging = new HashMap<>();
+      List<HRegionInfo> regions = admin.getTableRegions(table);
+      Map<Future, Pair<HRegionInfo, HRegionInfo>> regionsMerging = new ConcurrentHashMap<>();
       long roundsNoProgress = 0;
       while (regions.size() > targetRegions) {
         LOG.info("Iteration: {}", counter);
-        RegionInfo previous = null;
+        HRegionInfo previous = null;
         int regionSize = regions.size();
         LOG.info("Attempting to merge {} regions to reach the target {} ...", regionSize, targetRegions);
         //to request merge, regions must be OPEN, though
         regions = getOpenRegions(conn, table);
-        for (RegionInfo current : regions) {
+        for (HRegionInfo current : regions) {
           if (!current.isSplit()) {
             if (previous != null && canMerge(tableDir, previous, current, regionsMerging.values())) {
-              Future f = admin.mergeRegionsAsync(current.getEncodedNameAsBytes(),
-                  previous.getEncodedNameAsBytes(), true);
-              Pair<RegionInfo, RegionInfo> regionPair = new Pair<>(previous, current);
+              final HRegionInfo p = previous;
+              Future f = CompletableFuture.runAsync(() -> {
+                try {
+                  admin.mergeRegions(current.getEncodedNameAsBytes(),
+                      p.getEncodedNameAsBytes(), true);
+                } catch (IOException e) {
+                  e.printStackTrace();
+                }
+              });
+              Pair<HRegionInfo, HRegionInfo> regionPair = new Pair<>(previous, current);
               regionsMerging.put(f,regionPair);
               previous = null;
               if ((regionSize - regionsMerging.size()) <= targetRegions) {
@@ -222,7 +215,7 @@ public class RegionsMerger extends Configured implements org.apache.hadoop.util.
 
         //again, get all regions, regardless of the state,
         // in order to avoid breaking the loop prematurely
-        regions = admin.getRegions(table);
+        regions = admin.getTableRegions(table);
       }
     }
   }
